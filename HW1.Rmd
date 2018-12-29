@@ -1,0 +1,456 @@
+---
+title: "Statistical Methods in Data Science"
+subtitle : "Homework 1" 
+author: "Claudio Battiloro, Egon Ferri"
+output:
+  html_document:
+    toc: true
+    theme: spacelab
+    number_sections: true
+    df.print: tibble
+---
+<style>
+a:link {
+    color: darkred;
+}
+a:visited{
+    color: darkred;
+}
+a:hover {
+    color: orange;
+}
+
+</style>
+
+\usepackage{asmath}
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Matrices' randomized equality check algorithm
+
+## The Algorithm
+
+Let $U$, $V$ and $W$ be $(k\times k)$ matrices. Our goal is to check whether
+$UV=W$.
+It can be shown that naïvely making the matrix multiplication and comparing the result with $W$ will take
+$\mathcal{O}(k^3)$ operations.
+To improve it to $\mathcal{O}(k^2)$  at the expense of (possibly) returning a wrong answer - with a small probability- we want to use the following one-step randomized algorithm:
+
+$a)$ Pick a (single) random vector $\mathbf{z}=(z_{1},\,z_{2},...,\,z_{k})$
+
+$b)$ Compute $(UV\mathbf{z})$ by first computing $(V\mathbf{z})$ and then $U(V\mathbf{z})$
+
+$c)$ Compute $W\mathbf{z}$.
+
+$d)$ If $U(V\mathbf{z}=W\mathbf{z})$ then conclude that $UV=W$, otherwise return that $UV\neq W$
+
+What is the probability that the algorithm wrongly says $UV=W$ when they are actually not equal?
+
+To demonstrate it, first of all we simplify the math assuming the matrices and vector involved are defined over the integers modulo 2, in other words, $U,V,W\in\mathbb{R}^{k\times k}$ and $\mathbf{z}\in\mathbb{R}^{k}$ are all binary, $\left\{1,0\right\}$ objects, and the arithmetic
+operations $(+,\times,-,\div)$ are performed modulo 2.
+- Suppose $\,UV\mathbf{z}\neq W\mathbf{z}$
+
+- Define $\mathbf{c}=U(V\mathbf{z}) - W\mathbf{z}$. We are interested in this prob:
+\[\mathbb{P}(\mathbf{c}=\mathbf{0}|UV\neq W)\].
+
+Exploding $\mathbf{c}$ :
+\[\mathbf{c} = D\mathbf{z}=(UV-W)\mathbf{z}\].
+
+- Since $UV\neq W$, some element of $D$ is non zero. Suppose that the element $d_{ij}=1$, we obtain :
+\[c_i=\sum_{s=1}^{k}d_{is}z_{s}=d_{ij}z_{j}+r\,,\,for\,r\in\{0,1\}\,\,(1)\].
+
+- Now, we can focus on single elements of $\mathbf{c}$ due to their independence:
+\[\mathbb{P}(c_i=0)=\mathbb{P}(c_i=0|r=0)\mathbb{P}(r=0)+\mathbb{P}(c_i=0|r = 1)\mathbb{P}(r=1)\,\,(2)\].
+
+Observing that :
+\[\mathbb{P}(c_i=0|r=0)=\mathbb{P}(z_j=0)=\frac{1}{2}\,\,(3)\].
+\[\mathbb{P}(c_i=0|r=1)=\mathbb{P}(z_j=1,d_{ij}=1)\leq \mathbb{P}(z_j=1)=\frac{1}{2}\,\,(4)\].
+
+- At the end, plugging $(3)$ and $(4)$ in $(2)$ :
+  \[\mathbb{P}(c_i=0)\leq \frac{1}{2}\cdot\mathbb{P}(r=0) + \frac{1}{2}\cdot\mathbb{P}(r=1) = \frac{1}{2}\cdot\mathbb{P}(r=0) + \frac{1}{2}\cdot(1 - \mathbb{P}(r=0)) = \frac{1}{2} \].
+  
+- We obtain :
+\[ \mathbb{P}(\mathbf{c}=\mathbf{0})=\mathbb{P}(c_1=0,c_2=0,...,c_k=0)\leq \mathbb{P}(c_i=0) \leq \frac{1}{2} \].
+
+
+
+A possible implementation of the algorithm is the following. The code is tested on random binary matrices of dimensions $(3\times 3)$ and a random binary vector whose elements are extracted from a bernoullian distro with $p=0.5$ :
+
+
+
+```{r Alg1}
+alg1 <- function(k){
+  
+  U <- matrix(rbinom(k^2, 1, 0.5), k, k)
+  V <- matrix(rbinom(k^2, 1, 0.5), k, k)
+  W <- matrix(rbinom(k^2, 1, 0.5), k, k) 
+
+  z <- c(rbinom(dim(U)[2], 1, 0.5))
+  if (all(( U %*% ((V %*% z) %% 2 )) %% 2 == (W %*% z) %% 2 )){
+    return("U*V = W")
+  }
+    
+  return ("U*V != W")
+}
+
+alg1(5)
+```
+
+## Simulation
+
+We can compare the effectiveness of the algorithm within respect the theoretical result by :
+
+$a)$ Picking 7 different triplets of binary $(k\times k)$ matrices $U$, $V$ and $W$ with $k\in\{2,3,4,5,50,100,500\}$ such that $UV\neq W$ by construction.
+
+$b)$ For each of these triplets, repeating $M =10$, then $M=100$ then $M=10000$ times the one-step algorithm permits us to approximate the probability of error with the proportion of times (out of $M$) we get a wrong output.
+
+The following code implements this procedure, using a parallelized foreach to improve speed.
+```{r results= "hide", message = FALSE}
+
+rm(list=ls())
+library(knitr)
+library(doSNOW)
+library(foreach)
+cl <- makeCluster(3,type = "SOCK")
+registerDoSNOW(cl)
+set.seed(2325603)
+
+alg1 <- function(M,k){
+  
+  repeat{
+  U <- matrix(rbinom(k^2, 1, 0.5), k, k)
+  V <- matrix(rbinom(k^2, 1, 0.5), k, k)
+  W <- matrix(rbinom(k^2, 1, 0.5), k, k) 
+  if (! all((U%*%V) %% 2 == W %% 2 )) 
+  {break} 
+  }
+  
+  errors <- 0
+  for (i in 1:M){
+    z <- c(rbinom(dim(U)[2], 1, 0.5))
+    if(all(( U %*% ((V %*% z) %% 2 )) %% 2 == (W %*% z) %% 2 )){
+      errors <- errors +1
+    }
+  }
+  
+  return (errors/M)
+  
+  }
+
+probs <- vector()
+Ks <- c(2,3,4,5,50,100,500)
+M <- c(100,1000,10000)
+a <- Sys.time()
+foreach(k = 1:length(Ks))%do%{
+  probs<-c(probs,foreach(m = 1 : length(M))%dopar%{
+    alg1(M[m],Ks[k])
+  })
+  
+}
+b <- Sys.time()
+
+stopCluster(cl)
+probs <- data.frame(t(matrix(probs,nrow= length(M), ncol = length(Ks))))
+colnames(probs) <- paste0("M=",as.character(M))
+rownames(probs) <- paste0("K=",as.character(Ks))
+
+
+```
+
+```{r, echo = FALSE}
+kable(probs)
+
+```
+
+From the results, it's clear that the bound is respected. However, we observe that it isn't tight for large values of $k$. The explanation is intuitive and it's related to the number of possible random test vectors. For example, suppose $k=100$, there are $2^{100}$ possible $\mathbf{z}$, so we should have an extremely high number of tries $M$ to get the chance to extract a vector in way to return the test is correct.
+
+The simulation procedure would take, ignoring the matrices generation, $\mathcal{O}(M\times k^2)$ operation.
+
+Note that choosing $M>k^i\,,\,i\in \mathbb{N}$ permit us to write $M=c\times k^i\,,\,c>1$ so the order can be expressed as $\mathcal{O}(c\times k^{2+i})$.
+
+In terms of speed, the introduction of parallelization reduces execution time in the order of seconds.This fact can be apprecciate from following results, which show how far are the execution times in the two cases:
+
+
+```{r include = FALSE}
+c<-Sys.time()
+foreach(k = 1:length(Ks))%do%{
+ foreach(m = 1 : length(M))%do%{
+    alg1(M[m],Ks[k])
+  }
+}
+d<-Sys.time()
+```
+
+- Time with "%dopar"
+```{r echo = FALSE}
+tp <- b-a
+print(tp)
+```
+
+- Time without "%dopar"
+```{r echo = FALSE}
+ts <- d-c
+print(ts)
+```
+- $\Delta(t)$
+```{r echo = FALSE}
+print(abs(ts-tp))
+```
+
+## p-step Randomized Algorithm
+
+If we repeat the algorithm multiple times, suppose $p$ times, we'll get a $p-step\,\,randomized\,\,algorithm$.
+In terms of probability of error it's easy to demonstrate, since the independence of test vectors, that :
+$\mathbb{P}(UV\mathbf{z_1}=W\mathbf{z_1},UV\mathbf{z_2}=W\mathbf{z_2},...,UV\mathbf{z_p}=W\mathbf{z_p}\,|\,UV\neq W) = \prod\limits_{i =1}^{p}\mathbb{P}(UV\mathbf{z_i}=W\mathbf{z_i}\,|\,UV\neq W){\leq}\frac{1}{2^{p}}$
+
+## Iterated Bayes Theorem
+
+Another interesting topic is to evaluate the gradual change in our confidence in the correctness of the matrix multiplication as we repeat the randomized test. Let $E$ be the event that the matrix identity is correct, and let $B$ be the event that the test returns that the identity is correct.
+We can iteratively update how likely is the event $E$ in light of $B$ choosing a prior probability for $E$ and use the obtained posterior probability as the prior probability of the next step, supposing the algorithm always returns that the identity is correct (otherwise this make no sense). This probability, at the $p^{th}$ step can be written as:
+
+\[
+\mathbb{P}_p(E|B) = \frac{\mathbb{P}(B|E)\mathbb{P}_{p-1}(E|B)}{\mathbb{P}(B|E)\mathbb{P}_{0}(E)+\mathbb{P}(B|E^c)(1-\mathbb{P}_{p-1}(B|E))}\,\,\,,p\in\mathbb{N}\,
+\]
+
+With a little bit of simple math, the posterior probability at step $p$ can be written as a function of the initial a priori choice:
+\[\mathbb{P}_p(E|B) = \frac{\mathbb{P}(B|E)^p\mathbb{P}_{0}(E)}{\mathbb{P}(B|E)^p\mathbb{P}_{0}(E)+\mathbb{P}(B|E^c)^p(1-\mathbb{P}_{0}(E))}\,\,\,,p\in\mathbb{N}\,
+\]
+
+where $\mathbb{P}_0(E)$ is our a priori choice.
+
+Plotting $\mathbb{P}(E|B)$ as a function of $p$ and parametrized within respect $\mathbb{P}_0(E)$, we can observe how sensible is the result to our initial, probabilistic assumptions. Suppose $p$ varying from $1$ to $50$.
+For this case, it's trivial but useful to remember that the probability that test returns identity is correct, knowing that the identity is correct, is one ( $\mathbb{P}(B|E)=1$ ). We assumed the error probability equals to its bound ($\mathbb{P}(B|E^c)=0.5$) 
+
+```{r message = FALSE}
+rm(list = ls())
+library(viridis)
+Pebp <- function(p,Pe0,perr) (Pe0)/((Pe0) + ((perr^p)*(1-Pe0)))
+color_count <- 1
+pe0 <- seq(from = 0.1, to = 0.9, by = 0.1)
+colors <-  plasma(length(pe0),alpha = 1)
+leg <- vector()
+
+for(val in pe0){
+  if (val != pe0[1] ){
+  curve(Pebp(x, Pe0=val, perr = 0.5), from = 0, to = 50, add = T, col = colors[color_count],lwd = 1.8, xlab = "p", ylab = "P(E|B)p",xlim = c(1,50))
+    
+  }
+  else{
+    curve(Pebp(x, Pe0=val, perr = 0.5), from = 0, to = 50, add = F, col = colors[color_count],lwd = 1.8, xlab = "p", ylab = "P(E|B)p",xlim = c(1,50))
+    
+  }
+  color_count <- color_count+1
+  leg <- c(leg,val)
+}
+legend('bottomright', legend=paste0("P(E) = ",leg), lwd=2.4, 
+       col=colors, cex = 0.75)
+abline(1,0, lty = "dashed", lwd = 2)
+
+```
+
+We can focus on the interval $[1,10]$ and mark the steps to get a better visualization of the results:
+
+```{r, echo = FALSE}
+rm(list = ls())
+library(viridis)
+Pebp <- function(p,Pe0,perr) (Pe0)/((Pe0) + ((perr^p)*(1-Pe0)))
+color_count <- 1
+pe0 <- seq(from = 0.1, to = 0.9, by = 0.1)
+colors <-  plasma(length(pe0),alpha = 1)
+leg <- vector()
+
+for(val in pe0){
+  if (val != pe0[1] ){
+  curve(Pebp(x, Pe0=val, perr = 0.5), from = 0, to = 10, add = T, col = colors[color_count],lwd = 2.0, xlab = "p", ylab = "P(E|B)p")
+    points(0:10,y = Pebp(0:10, Pe0=val, perr = 0.5), col = colors[color_count],lwd = 2.0, xlab = "p", ylab = "P(E|B)p")
+  }
+  else{
+    curve(Pebp(x, Pe0=val, perr = 0.5), from = 0, to = 10, add = F, col = colors[color_count],lwd = 2.0, xlab = "p", ylab = "P(E|B)p")
+    points(0:10,y = Pebp(0:10, Pe0=val, perr = 0.5), col = colors[color_count],lwd = 2.0, xlab = "p", ylab = "P(E|B)p")
+  }
+  color_count <- color_count+1
+  leg <- c(leg,val)
+}
+legend('bottomright', legend=paste0("P(E) = ",leg), lwd=2.4, 
+       col=colors, cex = 0.75)
+abline(1,0, lty = "dashed", lwd = 2)
+```
+
+From the graphs above it's clear that increasing the a priori probability of $E$ guarantees, obviously, a faster convergence to $1$ of the a posteriori probability.
+
+
+In the end, using manipulate package permits us to appreciate parametrization changes in real-time, both on $\mathbb{P}_0(E)$ and $\mathbb{P}(B|E^c)=0.5$ . On R Markdown this tool will not work. Anyway, we share the code to obtain it:
+
+```{r}
+#library(manipulate)
+#manipulate(curve(Pebp(x, Pe0, perr), from = 0, to = 50, add = F, col='blue', lwd = 2.5, xlab = 'p', ylab = 'P(E|B)p'), Pe0 = slider(0, 1, 0.1),  perr = slider(0, 0.5, 0.1))
+
+```
+
+
+
+# The Shaked Monty Hall Game 
+
+We know about how Monty Hall Game works.
+
+Now imagine that during a show, the
+contestant had initially chosen door 1 and, just as Monty is about to open one of the other doors, a very
+violent earthquake rattles the building and one of the three doors flies open.
+It happens to be door 3, and it happens not to have the prize behind it. Well, since none of the rules was
+violated by the shaking, Monty decided to keep calm and carry on. . . the show must go on!
+
+Should the contestant stick with door 1, or switch to door 2, or does it make any
+difference?
+
+We've found two ways to approach this problem.
+
+## Solution 1
+
+The first solution is the simplest and the one that comes naturally. We define :
+
+- $H_i$ the event that prize is behind door $i$
+
+- $D_i$ the event that earthquake opens door $i$
+
+- $C$ the event that prize is not revealed.
+
+We know that the prize can be in each door with the same probability :
+\[\mathbb{P}(H_1)=\mathbb{P}(H_2)=\mathbb{P}(H_3)=\frac{1}{3}\] 
+
+Earthquake has no reason to choose a door or another (also in light of the location of the prize) so we can assume that $H_i$ and $D_i$ are independent events and :
+$\mathbb{P}(D_1)=\mathbb{P}(D_2)=\mathbb{P}(D_3)=\frac{1}{3}$
+$\mathbb{P}(D_i|H_j)=\frac{1}{3}\,,for\,i,j\in\{1,2,3\}$
+
+Our goal is to calculate the probability that the prize is behind door 1 (door 2) given that earthquake opens door 3 and the prize is not revealed. It can be done by applying Bayes Theorem and the chain rule:
+\[\mathbb{P}(H_1|D_3\cap C)=\frac{\mathbb{P}(H_1\cap D_3 \cap C)}{\mathbb{P}(D_3\cap C)}=\frac{\mathbb{P}(C|H_1 \cap D_3)\mathbb{P}(D_3|H_1)\mathbb{P}(H_1)}{\mathbb{P}(C|D_3)\mathbb{P}(D_3)}=\frac{1\times\frac{1}{3}\times \frac{1}{3}}{\frac{2}{3}\times \frac{1}{3}}=\frac{1}{2}\]
+
+It's obviuous that $\mathbb{P}(C|H_1 \cap D_3)=1$ becouse game sure continues if door 3 will be opened but prize is in door 1.
+$\mathbb{P}(C|D_3)=\mathbb{P}(H_1)+\mathbb{P}(H_2)=\frac{2}{3}$ becouse game continues given door 3 is open only if the prize is behind door 1 or door 2.
+
+## Solution 2
+
+Let's consider all possible outcomes eathquake can cause and express them in the following way.
+
+We call $Door_p=i\,,\,p\in \{1,2,3\}\,,\,i \in \{op,cl\}$ the event "earthquake opens $(j=op$) /doesn't open $(j=cl)$ the door number $i$.
+
+Then all possible doors outcomes can be written as:
+
+\[D_{ijk} = \{Door_1=i\cap Door_2=j \cap Door_3=k\}\,,\,i,j,k \in \{op,cl\}\]
+that indicates which doors are or not opened by the earthquake.
+Another important statement is if the game can continue or not. To add this feature to our model we define the event :
+\[E_{ijkp}=\{D_{ijk}\cap C_p\}\] 
+where $C_p$ indicates the event that game can continue or not,$p\in\{y$ (the game can continue),$n$ (the game can't continue)$\}$
+
+Thinking of it, it's clear that any outcome is a binary vector $\in \mathbb{R}^4$, so $\Omega$ is composed by $2^4=16$ elements.
+If we model every component of the vector as a D.R.V. $x:\Omega -> \{0,1\}$ and indicate that all feasible events (so we can't have all doors opened and game continues or viceversa, or 2 doors opened by the earthquake and game continues) have a probability $\mathbb{P}(E_{ijkp})>0$, we obtain this results :
+```{r, echo = FALSE,  }
+Outcomes <- c("(0,0,0,1)","(0,0,1,1)","(0,1,0,1)","(0,1,1,1)","(1,0,0,1)","(1,0,1,1)","(1,1,0,1)","(1,1,1,1)",
+              "(0,0,0,0)","(0,0,1,0)","(0,1,0,0)","(0,1,1,0)","(1,0,0,0)","(1,0,1,0)","(1,1,0,0)","(1,1,1,0)")
+Probability <- vector()
+for (i in 1:16){
+  
+  if (i == 4 | i == 6 | i ==7 | i ==8 | i == 9 ){
+    Probability <-c(Probability,0)
+  }
+  else{
+        Probability <-c(Probability,"p(w)")
+
+  }
+  
+}
+
+first_r <- data.frame(Outcomes,Probability)
+kable(first_r)
+
+```
+
+We know that the prize can be in each door with the same probability :
+\[\mathbb{P}(H_1)=\mathbb{P}(H_2)=\mathbb{P}(H_3)=\frac{1}{3}\] where $H_i$ means the prize is behind the door $i$.
+
+Now we are interested in finding how many of this outcomes have still a non zero probability to happen in light that the prize is in one of the doors, so :
+
+\[\mathbb{P}(E_{ijkp}|H_i)\,,\,i \in \{1,2,3\}\]
+ 
+This are the results:
+```{r echo = FALSE}
+Outcomes <- c("(0,0,0,1)","(0,0,1,1)","(0,1,0,1)","(0,1,1,1)","(1,0,0,1)","(1,0,1,1)","(1,1,0,1)","(1,1,1,1)",
+              "(0,0,0,0)","(0,0,1,0)","(0,1,0,0)","(0,1,1,0)","(1,0,0,0)","(1,0,1,0)","(1,1,0,0)","(1,1,1,0)")
+Prior <-c(0)
+up_1 <- c("p1(w)","p1(w)","p1(w)",0,0,0,0,0,0,0,0,"p1(w)","p1(w)","p1(w)","p1(w)","p1(w)")
+up_2 <- c("p2(w)","p2(w)",0,0,"p2(w)",0,0,0,0,0,"p2(w)","p2(w)",0,"p2(w)","p2(w)","p2(w)")
+up_3 <- c("p3(w)",0,"p3(w)",0,"p3(w)",0,0,0,0,"p3(w)",0,"p3(w)",0,"p3(w)","p3(w)","p3(w)")
+Probabilities <- vector()
+for (i in 1:16){
+  
+  if (i == 4 | i == 6 | i ==7 | i ==8 | i == 9 ){
+    Probabilities <-c(Probabilities,0)
+  }
+  else{
+        Probabilities <-c(Probabilities,"p(w)")
+
+  }
+  
+}
+first_r <- data.frame(Outcomes,Probabilities,up_1,up_2,up_3)
+names(first_r) <- c("*=Outcomes","Probability","P(*| H1)","P(* | H2)","P(*| H3)")
+kable(first_r)
+
+
+```
+
+
+It's easy to observe that ,for every conditioning event there is the same number of non zero probability events with same pattern and, due to this simmetry, we can calculate, using Bayes Theorem and LTP :
+\[\mathbb{P}(H_1|D_{cl,cl,op}\cap C_y) = \frac{\mathbb{P}(D_{cl,cl,op}\cap C_y|H_1)\mathbb{P}(H_1)}{\mathbb{P}(D_{cl,cl,op}\cap C_y|H_1)\mathbb{P}(H_1)+\mathbb{P}(D_{cl,cl,op}\cap C_y|H_2)\mathbb{P}(H_2)+\mathbb{P}(D_{cl,cl,op}\cap C_y|H_3)\mathbb{P}(H_3)}=\frac{k\times \frac{1}{3}}{k\times \frac{1}{3}+k\times \frac{1}{3}+0}=\frac{1}{2}\]
+\[\mathbb{P}(H_2|D_{cl,cl,op}\cap C_y) = \frac{\mathbb{P}(D_{cl,cl,op}\cap C_y|H_2)\mathbb{P}(H_2)}{\mathbb{P}(D_{cl,cl,op}\cap C_y|H_1)\mathbb{P}(H_1)+\mathbb{P}(D_{cl,cl,op}\cap C_y|H_2)\mathbb{P}(H_2)+\mathbb{P}(D_{cl,cl,op}\cap C_y|H_3)\mathbb{P}(H_3)}=\frac{k\times \frac{1}{3}}{k\times \frac{1}{3}+k\times \frac{1}{3}+0}=\frac{1}{2}\]
+
+So there is no probabilistic difference between keeping or sticking the door 1.
+
+## Simulation
+
+If the lector is still not bored (and this should be really really unlikely), we present a simulation for this experiment and show the correctness of obtained results : 
+
+```{r}
+rm(list=ls())
+# Probs of selecting a door
+doors_dis <- rep(1/3, 3)
+# Probs of prize behind a door
+prizes_dis <- rep(1/3, 3)
+# Simulations sizes
+M <- seq(from = 0, to = 3000, by = 30)
+
+set.seed(34555)
+
+prob_win_with_change <- vector()
+prob_win_without_change <- vector()
+ for (m in M) {
+   # Get the doors opened by the earthquake
+   door_vec <- sample(1:3, m, replace = T, prob = doors_dis)
+   # Get the prize locations
+   prize_vec <- sample(1:3, m, replace = T, prob = prizes_dis)
+   # We know that earthquake opens Door 3 and there is no prize there
+   known_c <- (door_vec == 3) & (!(prize_vec==3))
+   # We calculate the number of interest cases
+   total_cases <- length(which(known_c))
+   # We approximate the probability to win with and without change the 
+   # door
+   prob_win_with_change <- c(prob_win_with_change,sum( known_c & (prize_vec==2) ) / total_cases)
+   prob_win_without_change <- c(prob_win_without_change,sum( known_c & (prize_vec==1) ) / total_cases)
+ }
+plot(M,prob_win_with_change,type = "l",col = "gold",lwd= 1.5,xlim = c(0,3000),ylim = c(0,1),ylab="Prob to win")
+lines(M,prob_win_without_change,lwd= 1.5,col = plasma(2))
+legend("bottomright", legend=c("With change","Without change"), lwd=2.4, 
+       col=plasma(2), cex = 0.75)
+abline(0.5,0,lty = "dashed")
+
+
+
+ 
+
+```
+
+
+
+
